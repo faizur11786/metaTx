@@ -21,6 +21,17 @@
 		},
 		{
 			"type": "function",
+			"name": "mint",
+			"constant": false,
+			"payable": false,
+			"inputs": [
+				{ "type": "address", "name": "token" },
+				{ "type": "uint256", "name": "amount" }
+			],
+			"outputs": []
+		},
+		{
+			"type": "function",
 			"name": "names",
 			"constant": true,
 			"stateMutability": "view",
@@ -71,6 +82,6 @@
 			"outputs": []
 		}
 	],
-	"address": "0x986f46C834494e6e01e4e7255D299C1A11ac30E4",
-	"blockNumber": 28304065
+	"address": "0x13109727b1A430dfccd63916cAC5E9E5BcDD61D1",
+	"blockNumber": null
 }

@@ -1,8 +1,10 @@
 import '../styles/globals.css';
-import { Web3ReactProvider } from '@web3-react/core';
+import { useWeb3React, Web3ReactProvider } from '@web3-react/core';
 import Web3 from 'web3';
 import { ethers } from 'ethers';
 import { Web3Provider } from '@ethersproject/providers';
+import { injected } from '../connectors';
+import { useEffect } from 'react';
 function getLibrary(provider) {
 	const library = new Web3Provider(provider);
 	library.pollingInterval = 12000;

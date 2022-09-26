@@ -1,14 +1,12 @@
 import Head from 'next/head';
-import Image from 'next/image';
 import styles from '../styles/Home.module.css';
-import Web3 from 'web3';
 import { useEffect, useState } from 'react';
-import Web3WsProvider from 'web3-providers-ws';
 import { useWeb3React } from '@web3-react/core';
 import { injected } from '../connectors';
-
-import forwarderAbi from '../abi/Forwarder.json';
-import registryAbi from '../abi/Registry.json';
+import Forwarder from '../abi/Forwarder.json';
+import Registry from '../abi/Registry.json';
+// import Forwarder from '../abi/MinimalForwarder.json';
+// import Registry from '../abi/RegistryV2.json';
 import { ethers } from 'ethers';
 
 const EIP712Domain = [
@@ -26,80 +24,62 @@ const ForwardRequest = [
 	{ name: 'nonce', type: 'uint256' },
 	{ name: 'data', type: 'bytes' },
 ];
+function getMetaTxTypeData(chainId, verifyingContract) {
+	return {
+		types: {
+			EIP712Domain,
+			ForwardRequest,
+		},
+		domain: {
+			name: 'Forwarder',
+			version: '1',
+			chainId,
+			verifyingContract,
+		},
+		primaryType: 'ForwardRequest',
+	};
+}
 
 export default function Home() {
 	const { activate, library, account } = useWeb3React();
-	const [forwarderContract, setForwarderContract] = useState(null);
-	const [registryContract, setRegistryContract] = useState(null);
-	const [registers, setRegisters] = useState(null);
 
+	const [registers, setRegisters] = useState(null);
 	const [signature, setSignature] = useState(null);
 	const [request, setRequest] = useState(null);
-
-	const getInstance = async (address, abi) => {
+	const [message, setMessage] = useState('');
+	const [contract, setContract] = useState({
+		forwarder: null,
+		registry: null,
+	});
+	const getInstance = async (address, abi, name) => {
 		const provider = new ethers.providers.Web3Provider(library.provider);
 		const contract = new ethers.Contract(address, abi, provider.getSigner());
+		setContract((previous) => ({ ...previous, [name]: contract }));
 		return contract;
 	};
 
 	useEffect(() => {
 		(async () => {
-			if (library && account) {
-				const forwarderCon = await getInstance('0x4DA46bA4DBE3c49b51Fea12E1D9Ae71021768Db0', forwarderAbi);
-				setForwarderContract(forwarderCon);
-				const registryCon = await getInstance('0xf6182B90EF0feD5b838918e7eD0bEa3159577b0C', registryAbi);
-				setRegistryContract(registryCon);
+			if (account) {
+				await getInstance(Forwarder.address, Forwarder.abi, 'forwarder');
+				await getInstance(Registry.address, Registry.abi, 'registry');
 			}
 		})();
-	}, [library, account]);
+	}, [account]);
 
-	const [message, setMessage] = useState('');
-
-	// Sign Trasaction (eth_signTypedData_v4)
-	const signTypedData = async () => {
-		const data = registryContract.interface.encodeFunctionData('register', [message]);
-		const gas = await registryContract.estimateGas.register(message);
-		const nonce = await forwarderContract.getNonce(account).then((nonce) => nonce.toString());
-		const buildSignObject = {
-			types: {
-				EIP712Domain,
-				ForwardRequest,
-			},
-			domain: {
-				name: 'MinimalForwarder',
-				version: '0.0.1',
-				chainId: 80001,
-				verifyingContract: '0x4DA46bA4DBE3c49b51Fea12E1D9Ae71021768Db0',
-			},
-			primaryType: 'ForwardRequest',
-			message: {
-				from: account,
-				to: registryContract.address,
-				value: 0,
-				gas: gas.toString(),
-				nonce,
-				data,
-			},
-		};
-
-		const signature = await library.provider.request({
-			method: 'eth_signTypedData_v4',
-			params: [account, JSON.stringify(buildSignObject)],
-			from: account,
-		});
-		setSignature(signature);
-		setRequest(buildSignObject.message);
-
-		return { signature, request: buildSignObject.message };
-	};
+	useEffect(() => {
+		() => activate(injected);
+	}, []);
 
 	// Track events and react saved Quotes
 	useEffect(() => {
 		(async () => {
-			if (registryContract) {
-				const filters = await registryContract.filters.Registered();
-				registryContract.queryFilter(filters, 28184935, 'latest').then((events) => {
+			if (contract.registry) {
+				const filters = await contract.registry.filters.Registered();
+				console.log('filters', filters);
+				contract.registry.queryFilter(filters, 28304065, 'latest').then((events) => {
 					let registers = [];
+					console.log('events', events);
 					events.forEach((event) => {
 						registers.push({
 							name: event.args.name,
@@ -110,14 +90,49 @@ export default function Home() {
 				});
 			}
 		})();
-	}, [registryContract]);
+	}, [contract.registry, account]);
 
-	// Execute signed transaction with difrent account
-	const execute = async () => {
+	const signData = async () => {
+		if (account && message) {
+			const { token, forwarder, registry } = contract;
+			const data = registry.interface.encodeFunctionData('register', [message]);
+			const gas = await registry.estimateGas.register(message).then((gas) => gas.toString());
+			const nonce = await forwarder.getNonce(account).then((nonce) => nonce.toString());
+			const chainId = await forwarder.provider.getNetwork().then((n) => n.chainId);
+			const typeData = getMetaTxTypeData(chainId, forwarder.address);
+			const request = {
+				from: account,
+				to: registry.address,
+				value: 0,
+				gas,
+				nonce,
+				data,
+			};
+			const toSign = {
+				...typeData,
+				message: request,
+			};
+			console.log('toSign', toSign);
+			const signature = await library.provider.request({
+				method: 'eth_signTypedData_v4',
+				params: [account, JSON.stringify(toSign)],
+				from: account,
+			});
+			setSignature(signature);
+			setRequest(toSign.message);
+		} else {
+			console.error('account or token not found');
+		}
+	};
+
+	const executeMetaTx = async () => {
 		try {
 			console.log('executing with...', request, signature);
-			const tx = await forwarderContract.execute(request, signature);
-			console.log(tx);
+			const { forwarder } = contract;
+			const tx = await forwarder.execute(request, signature);
+			console.log('tx', tx);
+			const recepit = await tx.wait();
+			console.log('recepit', recepit);
 		} catch (error) {
 			console.log('error', error);
 		}
@@ -149,13 +164,13 @@ export default function Home() {
 							type='text'
 							style={{ width: '400px', padding: '0.5rem', outline: 'none' }}
 						/>
-						<button style={{ padding: '0.5rem' }} onClick={signTypedData}>
+						<button style={{ padding: '0.5rem' }} onClick={signData}>
 							Save
 						</button>
 					</div>
 				)}
 
-				{signature && request && <button onClick={execute}>Execute</button>}
+				{signature && request && <button onClick={executeMetaTx}>Execute</button>}
 				{registers && (
 					<div style={{ marginTop: '1rem' }}>
 						{registers.map((register, index) => {
