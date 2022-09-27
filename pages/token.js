@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { injected } from '../connectors';
 import { useWeb3React } from '@web3-react/core';
 import Token from '../abi/Token.json';
-import Forwarder from '../abi/MinimalForwarder.json';
-import Registry from '../abi/RegistryV2.json';
-// import Forwarder from '../abi/Forwarder.json';
-// import Registry from '../abi/Registry.json';
+// import Forwarder from '../abi/SimpleForwarder.json';
+import PaymentManager from '../abi/PaymentManager.json';
+import Forwarder from '../abi/Forwarder.json';
+import Registry from '../abi/Registry.json';
 import { ethers } from 'ethers';
 
 const EIP712Domain = [
@@ -42,7 +42,7 @@ const TokenPage = () => {
 	const { activate, library, account } = useWeb3React();
 	const [values, setValues] = useState();
 	const [balance, setBalance] = useState('');
-	const [registryBalance, setRegistryBalance] = useState('');
+	const [paymentManager, setPaymentManager] = useState('');
 	const [address, setAddress] = useState('');
 	const [signature, setSignature] = useState(null);
 	const [request, setRequest] = useState(null);
@@ -64,60 +64,109 @@ const TokenPage = () => {
 	useEffect(() => {
 		(() => activate(injected))();
 	}, []);
+
 	useEffect(() => {
 		(async () => {
 			if (account) {
 				const token = await getInstance(Token.address, Token.abi, 'token');
 				await getInstance(Forwarder.address, Forwarder.abi, 'forwarder');
+				await getInstance(PaymentManager.address, PaymentManager.abi, 'paymentManager');
 				await getInstance(Registry.address, Registry.abi, 'registry');
-				const allowance = await token.allowance(account, Registry.address);
-				setAllowance(Number(allowance) / 1e18);
+
 				const balance = await token.balanceOf(account);
-				const registryBalance = await token.balanceOf(Registry.address);
-				setRegistryBalance(Number(registryBalance) / 1e18);
+				console.log('balance', Number(balance));
 				setBalance(Number(balance) / 1e18);
+
+				const pbalance = await token.balanceOf(PaymentManager.address);
+				console.log('pbalance', Number(pbalance));
+				setPaymentManager(Number(pbalance) / 1e18);
+
+				const allowance = await token.allowance(account, PaymentManager.address);
+				console.log('allowance', Number(allowance));
+				setAllowance(Number(allowance) / 1e18);
 			}
 		})();
 	}, [account]);
 
 	const signData = async () => {
-		if ((account && values, address)) {
-			const { token, forwarder, registry } = contract;
+		if (account && values && address) {
+			const { token, forwarder, paymentManager, registry } = contract;
 
-			const data = registry.interface.encodeFunctionData('transferFromToken', [
-				token.address,
-				account,
+			const data = await paymentManager.populateTransaction.transfer(
+				token.address.toLowerCase(),
 				address.toLowerCase(),
-				ethers.utils.parseUnits(values, '18'),
-			]);
-			const gas = await registry.estimateGas
-				.transferFromToken(token.address, account, address.toLowerCase(), ethers.utils.parseUnits(values, '18'))
-				.then((gas) => gas.toString());
-			const nonce = await forwarder.getNonce(account.toLowerCase()).then((nonce) => nonce.toString());
+				ethers.utils.parseEther(values)
+			);
+			const gas = await paymentManager.estimateGas.transfer(
+				token.address.toLowerCase(),
+				address.toLowerCase(),
+				ethers.utils.parseEther(values)
+			);
+			const nonce = await forwarder.getNonce(account.toLowerCase());
 			const chainId = await forwarder.provider.getNetwork().then((n) => n.chainId);
-			const typeData = getMetaTxTypeData(chainId, forwarder.address);
+			const typeData = getMetaTxTypeData(chainId, forwarder.address.toLowerCase());
 			const request = {
 				from: account.toLowerCase(),
-				to: registry.address,
+				to: paymentManager.address.toLowerCase(),
 				value: 0,
-				gas,
-				nonce,
-				data,
+				gas: gas.toString(),
+				nonce: nonce.toString(),
+				data: data.data,
 			};
 			const toSign = {
 				...typeData,
 				message: request,
 			};
+			console.log(toSign);
 			const signature = await library.provider.request({
 				method: 'eth_signTypedData_v4',
-				params: [account, JSON.stringify(toSign)],
-				from: account,
+				params: [account.toLowerCase(), JSON.stringify(toSign)],
+				from: account.toLowerCase(),
 			});
 			setSignature(signature);
 			setRequest(toSign.message);
+
+			// const data = registry.interface.encodeFunctionData('transferFromToken', [
+			// 	token.address,
+			// 	account,
+			// 	address.toLowerCase(),
+			// 	ethers.utils.parseUnits(values, '18'),
+			// ]);
+			// const gas = await registry.estimateGas
+			// 	.transferFromToken(token.address, account, address.toLowerCase(), ethers.utils.parseUnits(values, '18'))
+			// 	.then((gas) => gas.toString());
+			// const nonce = await forwarder.getNonce(account.toLowerCase()).then((nonce) => nonce.toString());
+			// const chainId = await forwarder.provider.getNetwork().then((n) => n.chainId);
+			// const typeData = getMetaTxTypeData(chainId, forwarder.address);
+			// const request = {
+			// 	from: account.toLowerCase(),
+			// 	to: registry.address,
+			// 	value: 0,
+			// 	gas,
+			// 	nonce,
+			// 	data,
+			// };
+			// const toSign = {
+			// 	...typeData,
+			// 	message: request,
+			// };
+			// const signature = await library.provider.request({
+			// 	method: 'eth_signTypedData_v4',
+			// 	params: [account, JSON.stringify(toSign)],
+			// 	from: account,
+			// });
+			// setSignature(signature);
+			// setRequest(toSign.message);
 		} else {
 			console.error('account or token not found');
 		}
+	};
+
+	const getAllowance = async () => {
+		const { token, paymentManager } = contract;
+		const allowance = await token.allowance(account, paymentManager.address);
+		console.log(allowance);
+		setAllowance(Number(allowance) / 1e18);
 	};
 
 	const executeMetaTx = async () => {
@@ -157,9 +206,9 @@ const TokenPage = () => {
 							</div>
 						</div>
 					</div>
-					<div style={{ marginBottom: '2rem' }}>
+					<div style={{ marginBottom: '1rem' }}>
 						<label htmlFor='token' style={{ marginBottom: '0.5rem', display: 'block' }}>
-							Mint - Meta Token
+							Meta Token value
 						</label>
 						<div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
 							<div style={{ width: '100%' }}>
@@ -171,11 +220,6 @@ const TokenPage = () => {
 									placeholder='value'
 									style={{ width: '100%', padding: '0.5rem 1rem' }}
 								/>
-								{balance && <span style={{ fontSize: '12px' }}>{balance}</span>}
-								<br />
-								{allowance && <span style={{ fontSize: '12px' }}>Allowance : {balance}</span>}
-								<br />
-								<span>Registry contract Balance: {registryBalance}</span>
 							</div>
 						</div>
 					</div>
@@ -194,6 +238,37 @@ const TokenPage = () => {
 							Get Allowance
 						</button>
 					</div>
+				</div>
+				<div>
+					<ul style={{ marginTop: 0 }}>
+						<li>
+							<span>- Balance: {balance && balance}</span>
+							<span
+								style={{
+									fontWeight: 'bold',
+								}}
+							></span>
+						</li>
+						<hr />
+						<li>
+							<span>- Payment Manager Balance: {paymentManager && paymentManager}</span>
+							<span
+								style={{
+									fontWeight: 'bold',
+								}}
+							></span>
+						</li>
+						<hr />
+						<li>
+							<span>- Allowance: {allowance && allowance}</span>
+							<span
+								style={{
+									fontWeight: 'bold',
+								}}
+							></span>
+						</li>
+						<hr />
+					</ul>
 				</div>
 			</div>
 		</>
